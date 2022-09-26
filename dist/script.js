@@ -6,6 +6,14 @@ import DeviceDetector from "https://cdn.skypack.dev/device-detector-js@2.2.10";
 testSupport([
     { client: 'Chrome' },
 ]);
+function calculate_angle(a,b,c){
+
+    var radians = Math.atan2(c[1] - b[1], c[0] - b[0]) - Math.atan2(a[1] - b[1], a[0] - b[0])
+    var angle = Math.abs(radians * 180.0 / Math.PI)
+
+    return angle
+
+}
 function testSupport(supportedDevices) {
     const deviceDetector = new DeviceDetector();
     const detectedDevice = deviceDetector.parse(navigator.userAgent);
@@ -28,32 +36,23 @@ function testSupport(supportedDevices) {
     }
     if (!isSupported) {
         alert(`This demo, running on ${detectedDevice.client.name}/${detectedDevice.os.name}, ` +
-            `is not well supported at this time, continue at your own risk.`);
+            `is not well supported at this time, expect some flakiness while we improve our code.`);
     }
 }
 const controls = window;
+const LandmarkGrid = window.LandmarkGrid;
 const drawingUtils = window;
-const mpFaceMesh = window;
-const config = { locateFile: (file) => {
-        return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@` +
-            `${mpFaceMesh.VERSION}/${file}`;
-    } };
+const mpPose = window;
+const options = {
+    locateFile: (file) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/pose@${mpPose.VERSION}/${file}`;
+    }
+};
 // Our input frames will come from here.
 const videoElement = document.getElementsByClassName('input_video')[0];
 const canvasElement = document.getElementsByClassName('output_canvas')[0];
 const controlsElement = document.getElementsByClassName('control-panel')[0];
 const canvasCtx = canvasElement.getContext('2d');
-/**
- * Solution options.
- */
-const solutionOptions = {
-    selfieMode: true,
-    enableFaceGeometry: false,
-    maxNumFaces: 1,
-    refineLandmarks: false,
-    minDetectionConfidence: 0.5,
-    minTrackingConfidence: 0.5
-};
 // We'll add this to our control panel later, but we'll save it here so we can
 // call tick() each time the graph runs.
 const fpsControl = new controls.FPS();
@@ -62,6 +61,19 @@ const spinner = document.querySelector('.loading');
 spinner.ontransitionend = () => {
     spinner.style.display = 'none';
 };
+const landmarkContainer = document.getElementsByClassName('landmark-grid-container')[0];
+const grid = new LandmarkGrid(landmarkContainer, {
+    connectionColor: 0xCCCCCC,
+    definedColors: [{ name: 'LEFT', value: 0xffa500 }, { name: 'RIGHT', value: 0x00ffff }],
+    range: 2,
+    fitToGrid: true,
+    labelSuffix: 'm',
+    landmarkSize: 2,
+    numCellsPerAxis: 4,
+    showHidden: false,
+    centered: true,
+});
+let activeEffect = 'mask';
 function onResults(results) {
     // Hide the spinner.
     document.body.classList.add('loaded');
@@ -70,36 +82,90 @@ function onResults(results) {
     // Draw the overlays.
     canvasCtx.save();
     canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-    canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
-    if (results.multiFaceLandmarks) {
-        for (const landmarks of results.multiFaceLandmarks) {
-            drawingUtils.drawConnectors(canvasCtx, landmarks, mpFaceMesh.FACEMESH_TESSELATION, { color: '#C0C0C070', lineWidth: 1 });
-            drawingUtils.drawConnectors(canvasCtx, landmarks, mpFaceMesh.FACEMESH_RIGHT_EYE, { color: '#FF3030' });
-            drawingUtils.drawConnectors(canvasCtx, landmarks, mpFaceMesh.FACEMESH_RIGHT_EYEBROW, { color: '#FF3030' });
-            drawingUtils.drawConnectors(canvasCtx, landmarks, mpFaceMesh.FACEMESH_LEFT_EYE, { color: '#30FF30' });
-            drawingUtils.drawConnectors(canvasCtx, landmarks, mpFaceMesh.FACEMESH_LEFT_EYEBROW, { color: '#30FF30' });
-            drawingUtils.drawConnectors(canvasCtx, landmarks, mpFaceMesh.FACEMESH_FACE_OVAL, { color: '#E0E0E0' });
-            drawingUtils.drawConnectors(canvasCtx, landmarks, mpFaceMesh.FACEMESH_LIPS, { color: '#E0E0E0' });
-            if (solutionOptions.refineLandmarks) {
-                drawingUtils.drawConnectors(canvasCtx, landmarks, mpFaceMesh.FACEMESH_RIGHT_IRIS, { color: '#FF3030' });
-                drawingUtils.drawConnectors(canvasCtx, landmarks, mpFaceMesh.FACEMESH_LEFT_IRIS, { color: '#30FF30' });
-            }
+    if (results.segmentationMask) {
+        canvasCtx.drawImage(results.segmentationMask, 0, 0, canvasElement.width, canvasElement.height);
+        // Only overwrite existing pixels.
+        if (activeEffect === 'mask' || activeEffect === 'both') {
+            canvasCtx.globalCompositeOperation = 'source-in';
+            // This can be a color or a texture or whatever...
+            canvasCtx.fillStyle = '#00FF007F';
+            canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
         }
+        else {
+            canvasCtx.globalCompositeOperation = 'source-out';
+            canvasCtx.fillStyle = '#0000FF7F';
+            canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
+        }
+        // Only overwrite missing pixels.
+        canvasCtx.globalCompositeOperation = 'destination-atop';
+        canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+        canvasCtx.globalCompositeOperation = 'source-over';
+    }
+    else {
+        canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+    }
+    if (results.poseLandmarks) {
+        drawingUtils.drawConnectors(canvasCtx, results.poseLandmarks, mpPose.POSE_CONNECTIONS, { visibilityMin: 0.65, color: 'white' });
+        drawingUtils.drawLandmarks(canvasCtx, Object.values(mpPose.POSE_LANDMARKS_LEFT)
+            .map(index => results.poseLandmarks[index]), { visibilityMin: 0.65, color: 'white', fillColor: 'rgb(255,138,0)' });
+        drawingUtils.drawLandmarks(canvasCtx, Object.values(mpPose.POSE_LANDMARKS_RIGHT)
+            .map(index => results.poseLandmarks[index]), { visibilityMin: 0.65, color: 'white', fillColor: 'rgb(0,217,231)' });
+        drawingUtils.drawLandmarks(canvasCtx, Object.values(mpPose.POSE_LANDMARKS_NEUTRAL)
+            .map(index => results.poseLandmarks[index]), { visibilityMin: 0.65, color: 'white', fillColor: 'white' });
+        
     }
     canvasCtx.restore();
+    if (results.poseWorldLandmarks) {
+        grid.updateLandmarks(results.poseWorldLandmarks, mpPose.POSE_CONNECTIONS, [
+            { list: Object.values(mpPose.POSE_LANDMARKS_LEFT), color: 'LEFT' },
+            { list: Object.values(mpPose.POSE_LANDMARKS_RIGHT), color: 'RIGHT' },
+        ]);
+    }
+    else {
+        grid.updateLandmarks([]);
+    }
+    var l_hip = [results.poseLandmarks[23].x,results.poseLandmarks[23].y]
+    var l_shoulder = [results.poseLandmarks[11].x,results.poseLandmarks[11].y]
+    var l_wrist = [results.poseLandmarks[15].x,results.poseLandmarks[15].y]
+    var r_hip = [results.poseLandmarks[24].x,results.poseLandmarks[24].y]
+    var r_shoulder = [results.poseLandmarks[12].x,results.poseLandmarks[12].y]
+    var r_wrist = [results.poseLandmarks[16].x,results.poseLandmarks[16].y]
+    var angle_r=calculate_angle(r_hip,r_shoulder,r_wrist)
+    var angle_l=calculate_angle(l_hip,l_shoulder,l_wrist)
+    if(angle_l<80){
+        let stage='down'
+        console.log('down')
+    }
+    if(angle_l>85){
+        let stage='down'
+        console.log('up')
+    }
+    
 }
-const faceMesh = new mpFaceMesh.FaceMesh(config);
-faceMesh.setOptions(solutionOptions);
-faceMesh.onResults(onResults);
-// Present a control panel through which the user can manipulate the solution
-// options.
+const pose = new mpPose.Pose(options);
+pose.onResults(onResults);
+
 new controls
-    .ControlPanel(controlsElement, solutionOptions)
+    .ControlPanel(controlsElement, {
+    selfieMode: true,
+    modelComplexity: 1,
+    smoothLandmarks: true,
+    enableSegmentation: false,
+    smoothSegmentation: true,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5,
+    effect: 'background',
+})
     .add([
-    new controls.StaticText({ title: 'MediaPipe Face Mesh' }),
+    new controls.StaticText({ title: 'MediaPipe Pose' }),
     fpsControl,
     new controls.Toggle({ title: 'Selfie Mode', field: 'selfieMode' }),
     new controls.SourcePicker({
+        onSourceChanged: () => {
+            // Resets because this model gives better results when reset between
+            // source changes.
+            pose.reset();
+        },
         onFrame: async (input, size) => {
             const aspect = size.height / size.width;
             let width, height;
@@ -113,16 +179,17 @@ new controls
             }
             canvasElement.width = width;
             canvasElement.height = height;
-            await faceMesh.send({ image: input });
+            await pose.send({ image: input });
         },
     }),
     new controls.Slider({
-        title: 'Max Number of Faces',
-        field: 'maxNumFaces',
-        range: [1, 4],
-        step: 1
+        title: 'Model Complexity',
+        field: 'modelComplexity',
+        discrete: ['Lite', 'Full', 'Heavy'],
     }),
-    new controls.Toggle({ title: 'Refine Landmarks', field: 'refineLandmarks' }),
+    new controls.Toggle({ title: 'Smooth Landmarks', field: 'smoothLandmarks' }),
+    new controls.Toggle({ title: 'Enable Segmentation', field: 'enableSegmentation' }),
+    new controls.Toggle({ title: 'Smooth Segmentation', field: 'smoothSegmentation' }),
     new controls.Slider({
         title: 'Min Detection Confidence',
         field: 'minDetectionConfidence',
@@ -135,9 +202,15 @@ new controls
         range: [0, 1],
         step: 0.01
     }),
+    new controls.Slider({
+        title: 'Effect',
+        field: 'effect',
+        discrete: { 'background': 'Background', 'mask': 'Foreground' },
+    }),
 ])
     .on(x => {
     const options = x;
     videoElement.classList.toggle('selfie', options.selfieMode);
-    faceMesh.setOptions(options);
+    activeEffect = x['effect'];
+    pose.setOptions(options);
 });
