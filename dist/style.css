@@ -63,7 +63,7 @@ body {
 }
 
 .output_canvas {
-  max-width: 100%;
+  width: 100%;
   display: block;
   position: relative;
   left: 0;
@@ -90,6 +90,7 @@ body {
   position: absolute;
   left: 10px;
   top: 10px;
+  visibility: hidden;
 }
 
 .loading {
